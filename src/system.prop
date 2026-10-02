@@ -1,0 +1,3 @@
+# Virgo Core — Universal device profile
+# Intentionally no persistent sensor, thermal, governor, DNS, or TCP properties.
+# Stock HAL and vendor services remain authoritative for all hardware control.
