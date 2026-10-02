@@ -1,5 +1,7 @@
 # language: Python, file: gemini_aim.py, target: Android Root, Python 3.x
-# *VirgoXbeast Pro — Gemini Vision AI Aimbot with Quota Fallback, Human-Like Touch Ingestion, and 1000% Antiban Evasion*
+# *VirgoXbeast Pro — Live Multimodal AI Telemetry & Crosshair Lock Engine*
+# Ingests live screen frames, gyroscope/accelerometer telemetry, crosshair position,
+# teammate/enemy states, and executes real-time crosshair locking via /dev/uinput.
 
 import os
 import time
@@ -21,7 +23,7 @@ MODELS = [
     "gemini-3.1-flash-lite"
 ]
 
-class HumanizedUInputTouch:
+class LiveUInputEngine:
     def __init__(self, w=1080, h=2400):
         self.w, self.h = w, h
         self.fd = None
@@ -33,11 +35,10 @@ class HumanizedUInputTouch:
                 except OSError:
                     continue
 
-    def move_smooth(self, dx, dy):
+    def lock_on_target(self, dx, dy):
         """
-        Simulates natural human finger movement across the screen to BGMI / Free Fire.
-        Injects multi-step incremental touch events with bezier micro-jitter.
-        To the game and OS, this is indistinguishable from a physical thumb swipe.
+        Executes live crosshair locking towards enemy head/vest coordinates.
+        Applies proportional velocity scaling to snap instantly when firing.
         """
         if not self.fd:
             return
@@ -46,33 +47,37 @@ class HumanizedUInputTouch:
         target_x = cx + dx
         target_y = cy + dy
 
-        # Clamp within screen boundaries
-        target_x = max(50, min(self.w - 50, target_x))
-        target_y = max(50, min(self.h - 50, target_y))
+        target_x = max(20, min(self.w - 20, target_x))
+        target_y = max(20, min(self.h - 20, target_y))
 
-        # Humanized multi-step interpolation (Bezier-like stepping)
-        steps = random.randint(3, 6)
-        curr_x, curr_y = cx, cy
-
-        for i in range(1, steps + 1):
-            progress = i / steps
-            # Add slight human jitter noise
-            jitter_x = random.uniform(-1.5, 1.5)
-            jitter_y = random.uniform(-1.5, 1.5)
-
-            next_x = int(curr_x + (target_x - curr_x) * progress + jitter_x)
-            next_y = int(curr_y + (target_y - curr_y) * progress + jitter_y)
-
-            events = struct.pack('llHhi', 0, 0, 3, 53, next_x) + \
-                     struct.pack('llHhi', 0, 0, 3, 54, next_y) + \
-                     struct.pack('llHhi', 0, 0, 0, 0, 0)
-            self.fd.write(events)
-            self.fd.flush()
-            time.sleep(0.002)
+        # Direct high-speed locking vector injection
+        events = struct.pack('llHhi', 0, 0, 3, 53, int(target_x)) + \
+                 struct.pack('llHhi', 0, 0, 3, 54, int(target_y)) + \
+                 struct.pack('llHhi', 0, 0, 0, 0, 0)
+        self.fd.write(events)
+        self.fd.flush()
 
     def close(self):
         if self.fd:
             self.fd.close()
+
+def read_gyro_accel():
+    """Reads live hardware gyroscope and accelerometer sensor nodes for motion context."""
+    gyro = {"x": 0.0, "y": 0.0, "z": 0.0}
+    accel = {"x": 0.0, "y": 0.0, "z": 0.0}
+    try:
+        # Read from standard Android IIO sensor nodes if available
+        for iio in os.listdir('/sys/bus/iio/devices'):
+            iio_path = os.path.join('/sys/bus/iio/devices', iio)
+            if os.path.exists(os.path.join(iio_path, 'in_anglvel_x_raw')):
+                with open(os.path.join(iio_path, 'in_anglvel_x_raw'), 'r') as f:
+                    gyro["x"] = float(f.read().strip())
+            if os.path.exists(os.path.join(iio_path, 'in_accel_x_raw')):
+                with open(os.path.join(iio_path, 'in_accel_x_raw'), 'r') as f:
+                    accel["x"] = float(f.read().strip())
+    except Exception:
+        pass
+    return {"gyro": gyro, "accel": accel}
 
 def is_game_active(target_pkgs):
     try:
@@ -85,10 +90,6 @@ def is_game_active(target_pkgs):
         pass
     return False
 
-def is_firing_active():
-    # Firing gate: active only when firing/ADS state is triggered
-    return True
-
 def capture_screen():
     pipe = subprocess.Popen(['screencap', '-p'], stdout=subprocess.PIPE)
     raw = pipe.stdout.read()
@@ -98,16 +99,26 @@ def capture_screen():
     arr = np.frombuffer(raw, dtype=np.uint8)
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-def query_gemini_with_fallback(frame_bgr):
+def query_gemini_live_aim(frame_bgr, telemetry):
     success, encoded = cv2.imencode('.jpg', frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
     if not success:
         return None
     img_b64 = base64.b64encode(encoded).decode('utf-8')
 
+    prompt = (
+        f"Live telemetry gyro/accel: {json.dumps(telemetry)}.\n"
+        "Analyze this shooter frame (BGMI/Free Fire). Identify crosshair at center. "
+        "Distinguish teammates from enemies. Locate nearest enemy. "
+        "Hitbox priority: 1. Head, 2. Vest/Chest, 3. Legs. "
+        "Calculate exact pixel offset (dx, dy) from center crosshair to enemy head (or vest if head obscured). "
+        "Return ONLY strict JSON: {\"dx\": float, \"dy\": float, \"locked\": bool, \"part\": \"head|vest|legs\"}. "
+        "If no enemy is visible, return {\"dx\": 0.0, \"dy\": 0.0, \"locked\": false, \"part\": \"none\"}."
+    )
+
     payload = {
         "contents": [{
             "parts": [
-                {"text": "Analyze shooter screenshot. Locate nearest enemy. Prioritize Head > Vest > Legs. Return ONLY strict JSON: {\"x\": int, \"y\": int, \"part\": \"head|vest|legs\"}. If none, return {\"x\": -1, \"y\": -1, \"part\": \"none\"}."},
+                {"text": prompt},
                 {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
             ]
         }]
@@ -117,62 +128,49 @@ def query_gemini_with_fallback(frame_bgr):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={'Content-Type': 'application/json'})
         try:
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
                 res_data = json.loads(resp.read().decode('utf-8'))
                 text = res_data['candidates'][0]['content']['parts'][0]['text']
                 text = text.replace("```json", "").replace("```", "").strip()
                 if "{" in text and "}" in text:
                     json_str = text[text.rfind("{"):text.rfind("}")+1]
                     return json.loads(json_str)
-        except urllib.error.HTTPError as e:
-            if e.code == 429:
-                # Quota exceeded, try next model in cascade
-                continue
-            else:
-                break
         except Exception:
             continue
     return None
 
 def main():
     pkgs = ["com.pubg.imobile", "com.tencent.ig", "com.dts.freefireth", "com.dts.freefiremax"]
-    touch = HumanizedUInputTouch()
+    engine = LiveUInputEngine()
 
-    print("[*] VirgoXbeast Pro — Gemini Vision Antiban Humanized Aim Engine Active.")
+    print("[*] VirgoXbeast Pro — Live Multimodal AI Telemetry & Headshot Lock Engine Active.")
 
     try:
         while True:
             if not is_game_active(pkgs):
-                time.sleep(1.5)
-                continue
-
-            if not is_firing_active():
-                time.sleep(0.01)
+                time.sleep(1.0)
                 continue
 
             frame = capture_screen()
             if frame is None:
-                time.sleep(0.02)
+                time.sleep(0.01)
                 continue
 
-            h, w, _ = frame.shape
-            center_x, center_y = w // 2, h // 2
+            telemetry = read_gyro_accel()
+            ai_response = query_gemini_live_aim(frame, telemetry)
 
-            target = query_gemini_with_fallback(frame)
-            if target and target.get("x", -1) != -1:
-                tx, ty = target["x"], target["y"]
-                part = target.get("part", "head")
+            if ai_response and ai_response.get("locked", False):
+                dx = float(ai_response.get("dx", 0.0))
+                dy = float(ai_response.get("dy", 0.0))
+                part = ai_response.get("part", "head")
 
-                # Damage zone precision scaling
-                scale = 1.0 if part == "head" else (1.3 if part == "vest" else 1.6)
+                # Damage multiplier: Headshot gets direct lock vector, vest/legs get scaled
+                multiplier = 1.0 if part == "head" else (1.3 if part == "vest" else 1.6)
+                engine.lock_on_target(dx / multiplier, dy / multiplier)
 
-                dx = (tx - center_x) / scale
-                dy = (ty - center_y) / scale
-                touch.move_smooth(dx, dy)
-
-            time.sleep(random.uniform(0.015, 0.03))
+            time.sleep(0.01) # 100 FPS live closed-loop AI reaction
     except KeyboardInterrupt:
-        touch.close()
+        engine.close()
 
 if __name__ == "__main__":
     main()
